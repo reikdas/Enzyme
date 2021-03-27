@@ -54,6 +54,7 @@
 #include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/IR/Verifier.h"
 
 #include "ActivityAnalysis.h"
 #include "EnzymeLogic.h"
@@ -969,6 +970,105 @@ public:
       if (F.getName() == "__fd_sincos_1" || F.getName() == "__fd_cos_1" ||
           F.getName() == "__mth_i_ipowi") {
         F.addFnAttr(Attribute::ReadNone);
+      }
+      if (F.getName() == "cblas_ddot") {
+        auto Func = M.getFunction("cblas_ddot");
+        Function::arg_iterator args = Func->arg_begin();
+        Value *N = args++;
+        N->setName("enzyme.ddot.N");
+        Value *DX = args++;
+        DX->setName("enzyme.ddot.DX");
+        Value *INCX = args++;
+        INCX->setName("enzyme.ddot.INCX");
+        Value *DY = args++;
+        DY->setName("enzyme.ddot.DY");
+        Value *INCY = args++;
+        INCY->setName("enzyme.ddot.INCY");
+        auto *entry = BasicBlock::Create(M.getContext(), "entry", Func);
+        IRBuilder Builder(M.getContext());
+        Builder.SetInsertPoint(entry);
+        auto *forcond = BasicBlock::Create(M.getContext(), "for.cond", Func);
+        auto nalloc = Builder.CreateAlloca(Type::getInt32Ty(M.getContext()), 0,
+                                           "enzyme.ddot.N.addr");
+        auto dxalloc = Builder.CreateAlloca(
+            Type::getDoublePtrTy(M.getContext()), 0, "enzyme.ddot.DX.addr");
+        auto incxalloc = Builder.CreateAlloca(Type::getInt32Ty(M.getContext()),
+                                              0, "enzyme.ddot.INCX.addr");
+        auto dyalloc = Builder.CreateAlloca(
+            Type::getDoublePtrTy(M.getContext()), 0, "enzyme.ddot.DY.addr");
+        auto incyalloc = Builder.CreateAlloca(Type::getInt32Ty(M.getContext()),
+                                              0, "enzyme.ddot.INCY.addr");
+        auto SUM = Builder.CreateAlloca(Type::getDoubleTy(M.getContext()), 0,
+                                        "enzyme.ddot.sum");
+        auto I = Builder.CreateAlloca(Type::getInt32Ty(M.getContext()), 0,
+                                      "enzyme.ddot.i");
+        Builder.CreateStore(N, nalloc);
+        Builder.CreateStore(DX, dxalloc);
+        Builder.CreateStore(INCX, incxalloc);
+        Builder.CreateStore(DY, dyalloc);
+        Builder.CreateStore(INCY, incyalloc);
+        Builder.CreateStore(
+            ConstantFP::get(Type::getDoubleTy(M.getContext()), 0.000000e+00),
+            SUM);
+        Builder.CreateStore(Builder.getInt32(0), I);
+        Builder.CreateBr(forcond);
+        Builder.SetInsertPoint(forcond);
+        auto forcondiload = Builder.CreateLoad(Type::getInt32Ty(M.getContext()),
+                                               I, "enzyme.ddot.forcondiload");
+        auto forcondnaddrload =
+            Builder.CreateLoad(Type::getInt32Ty(M.getContext()), nalloc,
+                               "enzyme.ddot.forcondnaddrload");
+        auto compare =
+            Builder.CreateICmpSLT(forcondiload, forcondnaddrload, "comp");
+        auto *forbody = BasicBlock::Create(M.getContext(), "for.body", Func);
+        auto *forinc = BasicBlock::Create(M.getContext(), "for.inc", Func);
+        auto *forend = BasicBlock::Create(M.getContext(), "for.end", Func);
+        Builder.CreateCondBr(compare, forbody, forend);
+        Builder.SetInsertPoint(forbody);
+        auto forbodyloadsum =
+            Builder.CreateLoad(Type::getDoubleTy(M.getContext()), SUM,
+                               "enzyme.ddot.forbodyloadsum");
+        auto forbodyloaddx =
+            Builder.CreateLoad(Type::getDoublePtrTy(M.getContext()), dxalloc,
+                               "enzyme.ddot.forbodyloaddx");
+        auto forbodyloadi = Builder.CreateLoad(Type::getInt32Ty(M.getContext()),
+                                               I, "enzyme.ddot.forbodyloadi");
+        auto idxprom = Builder.CreateSExt(
+            forbodyloadi, Type::getInt64Ty(M.getContext()), "idxprom");
+        auto arrayidx = Builder.CreateGEP(Type::getDoubleTy(M.getContext()),
+                                          forbodyloaddx, idxprom, "arrayidx");
+        auto forbodyloadarrayidx =
+            Builder.CreateLoad(Type::getDoubleTy(M.getContext()), arrayidx,
+                               "enzyme.ddot.forbodyloadarrayidx");
+        auto forbodyloaddy =
+            Builder.CreateLoad(Type::getDoublePtrTy(M.getContext()), dyalloc,
+                               "enzyme.ddot.forbodyloaddy");
+        auto forbodyloadi2 = Builder.CreateLoad(
+            Type::getInt32Ty(M.getContext()), I, "enzyme.ddot.forbodyloadi2");
+        auto idxprom1 = Builder.CreateSExt(
+            forbodyloadi2, Type::getInt64Ty(M.getContext()), "idxprom1");
+        auto arrayidx2 =
+            Builder.CreateGEP(Type::getDoubleTy(M.getContext()), forbodyloaddy,
+                              idxprom1, "arrayidx2");
+        auto loadarrayidx2 =
+            Builder.CreateLoad(Type::getDoubleTy(M.getContext()), arrayidx2,
+                               "enzyme.ddot.loadarrayidx2");
+        auto mul =
+            Builder.CreateFMul(forbodyloadarrayidx, loadarrayidx2, "mul");
+        auto add = Builder.CreateFAdd(forbodyloadsum, mul, "add");
+        Builder.CreateStore(add, SUM);
+        Builder.CreateBr(forinc);
+        Builder.SetInsertPoint(forinc);
+        auto iload = Builder.CreateLoad(Type::getInt32Ty(M.getContext()), I,
+                                        "enzyme.ddot.iload");
+        auto inc = Builder.CreateNSWAdd(iload, Builder.getInt32(1), "inc");
+        Builder.CreateStore(inc, I);
+        Builder.CreateBr(forcond);
+        Builder.SetInsertPoint(forend);
+        auto ret = Builder.CreateLoad(Type::getDoubleTy(M.getContext()), SUM,
+                                      "enzyme.ddot.ret");
+        Builder.CreateRet(ret);
+        verifyFunction(*Func);
       }
       if (F.empty())
         continue;
