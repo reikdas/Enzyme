@@ -3409,6 +3409,56 @@ public:
       return;
     }
 
+    if (called && called->getName() == "cblas_ddot") {
+      if (Mode != DerivativeMode::ForwardMode) {
+        IRBuilder<> Builder2(call.getParent());
+        getReverseBuilder(Builder2);
+
+        Value *D1;
+        Value *D2;
+
+        for (auto arg = gutils->newFunc->arg_begin();
+             arg != gutils->newFunc->arg_end(); ++arg) {
+          if (arg->hasName()) {
+            if (arg->getName().str() ==
+                (orig->getArgOperand(3)->getName() + "'").str())
+              D1 = arg;
+            else if (arg->getName().str() ==
+                     (orig->getArgOperand(1)->getName() + "'").str())
+              D2 = arg;
+          }
+        }
+
+        SmallVector<Value *, 6> args1 = {
+            lookup(gutils->getNewFromOriginal(orig->getArgOperand(0)),
+                   Builder2),
+            diffe(orig, Builder2),
+            lookup(gutils->getNewFromOriginal(orig->getArgOperand(1)),
+                   Builder2),
+            Builder2.getInt32(1),
+            D1,
+            Builder2.getInt32(1)};
+        SmallVector<Value *, 6> args2 = {
+            lookup(gutils->getNewFromOriginal(orig->getArgOperand(0)),
+                   Builder2),
+            diffe(orig, Builder2),
+            lookup(gutils->getNewFromOriginal(orig->getArgOperand(3)),
+                   Builder2),
+            Builder2.getInt32(1),
+            D2,
+            Builder2.getInt32(1)};
+        auto daxpycall = gutils->oldFunc->getParent()->getOrInsertFunction(
+            "cblas_daxpy", Builder2.getVoidTy(), Builder2.getInt32Ty(),
+            Builder2.getDoubleTy(), Type::getDoublePtrTy(called->getContext()),
+            Builder2.getInt32Ty(), Type::getDoublePtrTy(called->getContext()),
+            Builder2.getInt32Ty());
+        Value *dif0 = Builder2.CreateCall(daxpycall, args1);
+        Value *dif1 = Builder2.CreateCall(daxpycall, args2);
+        setDiffe(orig, Constant::getNullValue(orig->getType()), Builder2);
+      }
+      return;
+    }
+
 #if LLVM_VERSION_MAJOR >= 11
     if (auto castinst = dyn_cast<ConstantExpr>(orig->getCalledOperand())) {
 #else
