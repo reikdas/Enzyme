@@ -3409,25 +3409,15 @@ public:
       return;
     }
 
-    if (called && called->getName() == "cblas_ddot") {
-      if (Mode != DerivativeMode::ForwardMode) {
+    if (funcName == "cblas_ddot") {
+      if (Mode == DerivativeMode::ReverseModeCombined || Mode == DerivativeMode::ReverseModeGradient) {
         IRBuilder<> Builder2(call.getParent());
         getReverseBuilder(Builder2);
 
-        Value *D1;
-        Value *D2;
-
-        for (auto arg = gutils->newFunc->arg_begin();
-             arg != gutils->newFunc->arg_end(); ++arg) {
-          if (arg->hasName()) {
-            if (arg->getName().str() ==
-                (orig->getArgOperand(3)->getName() + "'").str())
-              D1 = arg;
-            else if (arg->getName().str() ==
-                     (orig->getArgOperand(1)->getName() + "'").str())
-              D2 = arg;
-          }
-        }
+        assert (!isa<Constant>(orig->getArgOperand(3)));
+        Value *D1 = gutils->invertPointerM(orig->getArgOperand(3), Builder2);
+        assert (!isa<Constant>(orig->getArgOperand(1)));
+        Value *D2 = gutils->invertPointerM(orig->getArgOperand(1), Builder2);
 
         SmallVector<Value *, 6> args1 = {
             lookup(gutils->getNewFromOriginal(orig->getArgOperand(0)),
