@@ -3410,6 +3410,46 @@ public:
     }
 
     if (funcName == "cblas_ddot") {
+      Value *malins1_cast = nullptr;
+      Value *malins2_cast = nullptr;
+      if (Mode == DerivativeMode::ReverseModeCombined) {
+        auto size =
+            ConstantExpr::getSizeOf(Type::getDoubleTy(call.getContext()));
+        auto malins1 = CallInst::CreateMalloc(
+            gutils->getNewFromOriginal(&call), size->getType(),
+            Type::getDoubleTy(call.getContext()), size, call.getArgOperand(0),
+            nullptr, "");
+        auto malins2 = CallInst::CreateMalloc(
+            gutils->getNewFromOriginal(&call), size->getType(),
+            Type::getDoubleTy(call.getContext()), size, call.getArgOperand(0),
+            nullptr, "");
+        BuilderZ.SetInsertPoint(gutils->getNewFromOriginal(&call));
+        malins1_cast = BuilderZ.CreateBitCast(
+            malins1, Type::getDoublePtrTy(call.getContext()));
+        malins2_cast = BuilderZ.CreateBitCast(
+            malins2, Type::getDoublePtrTy(call.getContext()));
+        auto *newcall = dyn_cast<CallInst>(gutils->getNewFromOriginal(&call));
+        auto memcpy_size1 =
+            (int)(call.getFunction()
+                      ->getParent()
+                      ->getDataLayout()
+                      .getTypeAllocSize(newcall->getArgOperand(1)->getType())) *
+            dyn_cast<ConstantInt>(call.getArgOperand(0))->getSExtValue();
+        auto memcpy_size2 =
+            (int)(call.getFunction()
+                      ->getParent()
+                      ->getDataLayout()
+                      .getTypeAllocSize(newcall->getArgOperand(3)->getType())) *
+            dyn_cast<ConstantInt>(call.getArgOperand(0))->getSExtValue();
+        BuilderZ.CreateMemCpy(malins1_cast, MaybeAlign(),
+                              newcall->getArgOperand(1), MaybeAlign(),
+                              memcpy_size1);
+        BuilderZ.CreateMemCpy(malins2_cast, MaybeAlign(),
+                              newcall->getArgOperand(3), MaybeAlign(),
+                              memcpy_size2);
+        /*malins1_cast = gutils->cacheForReverse(
+            BuilderZ, malins1_cast, getIndex(&call, CacheType::Tape));*/
+      }
       if (Mode == DerivativeMode::ReverseModeCombined || Mode == DerivativeMode::ReverseModeGradient) {
         IRBuilder<> Builder2(call.getParent());
         getReverseBuilder(Builder2);
@@ -3419,12 +3459,22 @@ public:
         assert (!isa<Constant>(orig->getArgOperand(1)));
         Value *D2 = gutils->invertPointerM(orig->getArgOperand(1), Builder2);
 
+        Value *arg1 = nullptr;
+        Value *arg2 = nullptr;
+        if (Mode == DerivativeMode::ReverseModeCombined) {
+          /*malins1_cast = gutils->cacheForReverse(
+              Builder2, malins1_cast, getIndex(&call, CacheType::Tape));*/
+          arg1 = malins1_cast;
+          arg2 = malins2_cast;
+        } else {
+          arg1 = gutils->getNewFromOriginal(orig->getArgOperand(1));
+          arg2 = gutils->getNewFromOriginal(orig->getArgOperand(3));
+        }
         SmallVector<Value *, 6> args1 = {
             lookup(gutils->getNewFromOriginal(orig->getArgOperand(0)),
                    Builder2),
             diffe(orig, Builder2),
-            lookup(gutils->getNewFromOriginal(orig->getArgOperand(1)),
-                   Builder2),
+            lookup(arg1, Builder2),
             Builder2.getInt32(1),
             D1,
             Builder2.getInt32(1)};
@@ -3432,8 +3482,7 @@ public:
             lookup(gutils->getNewFromOriginal(orig->getArgOperand(0)),
                    Builder2),
             diffe(orig, Builder2),
-            lookup(gutils->getNewFromOriginal(orig->getArgOperand(3)),
-                   Builder2),
+            lookup(arg2, Builder2),
             Builder2.getInt32(1),
             D2,
             Builder2.getInt32(1)};
@@ -3444,6 +3493,10 @@ public:
             Builder2.getInt32Ty());
         Value *dif0 = Builder2.CreateCall(daxpycall, args1);
         Value *dif1 = Builder2.CreateCall(daxpycall, args2);
+        if (Mode == DerivativeMode::ReverseModeCombined) {
+          CallInst::CreateFree(arg1, Builder2.GetInsertBlock());
+          CallInst::CreateFree(arg2, Builder2.GetInsertBlock());
+        }
         setDiffe(orig, Constant::getNullValue(orig->getType()), Builder2);
       }
       return;
